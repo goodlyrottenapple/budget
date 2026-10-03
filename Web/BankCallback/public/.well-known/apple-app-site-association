@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["E8R49PC9CZ.com.personal.budgetr"],
+        "components": [{"/": "/truelayer/callback", "comment": "TrueLayer bank authorisation callback"}]
+      }
+    ]
+  },
+  "webcredentials": {"apps": ["E8R49PC9CZ.com.personal.budgetr"]}
+}

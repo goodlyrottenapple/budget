@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PreferenceSpecifiers</key>
+    <array>
+        <dict>
+            <key>Type</key>
+            <string>PSGroupSpecifier</string>
+            <key>Title</key>
+            <string>Privacy</string>
+            <key>FooterText</key>
+            <string>Require Face ID when opening Budget or returning after five minutes away. Touch ID or your device passcode can also unlock the app. Turning this off requires one final unlock in Budget.</string>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Require Face ID</string>
+            <key>Key</key>
+            <string>requireAppAuthentication</string>
+            <key>DefaultValue</key>
+            <false/>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSGroupSpecifier</string>
+            <key>Title</key>
+            <string>Developer</string>
+            <key>FooterText</key>
+            <string>Show bank diagnostics and manual connection tools. Demo Data displays fictional accounts and transactions without changing your saved data. Turn it off to return to your accounts.</string>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSToggleSwitchSpecifier</string>
+            <key>Title</key>
+            <string>Developer Mode</string>
+            <key>Key</key>
+            <string>developerModeEnabled</string>
+            <key>DefaultValue</key>
+            <false/>
+        </dict>
+        <dict>
+            <key>Type</key><string>PSToggleSwitchSpecifier</string>
+            <key>Title</key><string>Demo Data</string>
+            <key>Key</key><string>demoDataEnabled</string>
+            <key>DefaultValue</key><false/>
+        </dict>
+    </array>
+</dict>
+</plist>

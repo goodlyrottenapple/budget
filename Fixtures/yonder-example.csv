@@ -1,0 +1,5 @@
+date,description,amount,currency,account,id,category
+2026-09-12,"Coffee, London",-4.50,GBP,Yonder,example-1,Dining
+2026-09-13,Dinner,-38.00,GBP,Yonder,example-2,Dining
+2026-09-14,Card repayment,100.00,GBP,Yonder,example-3,Transfer
+2026-09-15,Shop refund,12.00,GBP,Yonder,example-4,Shopping

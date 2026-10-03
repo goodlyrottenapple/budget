@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "budget-bank-callback-goodlyrottenapple",
+  "compatibility_date": "2026-09-17",
+  "observability": {
+    "enabled": false
+  },
+  "assets": {
+    "directory": "public",
+    "html_handling": "drop-trailing-slash"
+  }
+}

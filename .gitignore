@@ -1,0 +1,27 @@
+*secret*
+.env*
+!.env.example
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+__pycache__/
+*.pyc
+bank-data*.json
+/yonder.csv
+/yonder_*.csv
+
+# Local tooling, credentials and financial data
+.DS_Store
+.wrangler/
+node_modules/
+.dev.vars*
+*.log
+*.store
+*.store-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.p12
+*.p8
+*.mobileprovision

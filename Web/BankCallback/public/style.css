@@ -1,0 +1,7 @@
+:root { color-scheme: light; font: 17px -apple-system, BlinkMacSystemFont, sans-serif; color: #1f3830; background: #f5f2eb; }
+body { margin: 0; min-height: 100svh; display: grid; place-items: center; }
+main { max-width: 28rem; padding: 2rem; text-align: center; }
+h1 { font: 2.5rem Georgia, serif; }
+p { line-height: 1.6; }
+a { display: inline-block; padding: 0.9rem 1.4rem; background: #1f3830; color: #fff; border-radius: 0.7rem; text-decoration: none; }
+[hidden] { display: none; }
