@@ -6,6 +6,22 @@ import BudgetCore
 
 @MainActor
 final class BudgetPersistenceTests: XCTestCase {
+    func testBudgetCurrencySurvivesReopeningAndLegacyDefaultIsUnset() throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("Budget.store")
+        var repository: BudgetRepository? = try BudgetRepository(storeURL: url)
+        var snapshot = BudgetSnapshot(entries: [], budgets: ["Dining": 200], isDemo: false)
+        try repository?.save(snapshot)
+        XCTAssertNil(try repository?.load()?.budgetCurrency)
+        snapshot.budgetCurrency = "EUR"
+        try repository?.save(snapshot)
+        repository = nil
+        let reopened = try BudgetRepository(storeURL: url)
+        XCTAssertEqual(try reopened.load()?.budgetCurrency, "EUR")
+        XCTAssertEqual(try reopened.load()?.budgets["Dining"], 200)
+    }
+
     func testReimbursementSurvivesReopeningAndCanBeCleared() throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }

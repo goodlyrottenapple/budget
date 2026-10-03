@@ -145,7 +145,7 @@ date,description,amount,currency,account,id,category
 
 Required columns are `date,description,amount`. Dates use `YYYY-MM-DD`; spending is negative and received funds positive. Optional columns are `currency,account,id,category`. Include unique IDs for otherwise identical purchases: without IDs, identical same-day rows can be treated as duplicates. Classify card repayments as Transfer to exclude them from spending.
 
-Yonder's displayed balance is calculated from imported transactions in the current month, assuming a zero opening balance. It is not a live bank balance. GBP budgets do not convert other currencies.
+Yonder's displayed balance is calculated from imported transactions in the current month, assuming a zero opening balance. It is not a live bank balance. Budgets use the currency selected in **Overview → Budget → Edit**. The currency dropdown appears only when multiple currencies are detected in accounts or transactions. With a single currency, that currency is used automatically. Changing currency retains the entered limits without converting them. Current balances show a separate total for each currency; amounts are never combined across currencies.
 
 ## Sync, storage and app settings
 

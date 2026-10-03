@@ -454,6 +454,13 @@ final class BudgetStore: ObservableObject {
     private let bankAuthorisationSession = BankAuthorisationSession()
     @Published var entries: [Entry] = []
     @Published var budgets: [String: Decimal] = [:]
+    @Published var preferredBudgetCurrency: String?
+    var availableCurrencies: [String] {
+        BudgetCurrency.detected(accounts: bankAccounts.values.flatMap { $0 }, entries: entries)
+    }
+    var budgetCurrency: String {
+        BudgetCurrency.selected(preferredBudgetCurrency, available: availableCurrencies)
+    }
     @Published var isDemo = true
     @Published var message: String?
     @Published var sources: [BankProvider] = []
@@ -519,11 +526,12 @@ final class BudgetStore: ObservableObject {
     }
 
     private var snapshot: BudgetSnapshot {
-        BudgetSnapshot(entries: entries, budgets: budgets, isDemo: isDemo, sources: sources, merchantRules: merchantRules, merchantMatches: merchantMatches)
+        BudgetSnapshot(entries: entries, budgets: budgets, isDemo: isDemo, sources: sources, merchantRules: merchantRules, merchantMatches: merchantMatches, budgetCurrency: preferredBudgetCurrency)
     }
 
     private func restore(_ state: BudgetSnapshot) {
         entries = state.entries; budgets = state.budgets; isDemo = state.isDemo
+        preferredBudgetCurrency = state.budgetCurrency
         sources = state.sources; merchantRules = state.merchantRules; merchantMatches = state.merchantMatches
     }
 
@@ -1170,6 +1178,13 @@ struct RootView: View {
     }
 }
 
+private func currencySymbol(_ currency: String) -> String {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencyCode = currency
+    return formatter.currencySymbol ?? currency
+}
+
 private func money(_ amount: Decimal, _ currency: String = "GBP") -> String {
     let formatter = NumberFormatter()
     formatter.numberStyle = .currency; formatter.currencyCode = currency
@@ -1227,11 +1242,11 @@ private struct OverviewBalancesView: View {
     var body: some View {
         let allAccounts = accounts
         let items = allAccounts.filter { $0.account.netBalance != 0 }
-        let yonderBalance = ImportedAccountBalance.balance(entries: store.entries, account: "Yonder", currency: "GBP")
-        let showYonder = store.entries.contains {
+        let imported = store.entries.filter {
             $0.account == "Yonder" && ($0.id.hasPrefix("csv:") || $0.id.hasPrefix("yonder:"))
         }
-        let summary = BankBalanceSummary(accounts: allAccounts.map(\.account), currency: "GBP", importedBalance: yonderBalance)
+        let importedCurrencies = BudgetCurrency.detected(accounts: [], entries: imported)
+        let currencies = BudgetCurrency.detected(accounts: allAccounts.map(\.account), entries: imported)
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Current balances.").font(.system(size: 32, weight: .regular, design: .serif)).foregroundStyle(ink)
@@ -1242,7 +1257,11 @@ private struct OverviewBalancesView: View {
             }
             ScrollView(.horizontal) {
                 HStack(alignment: .top, spacing: 12) {
-                    totalTile(summary).frame(width: tileWidth)
+                    ForEach(currencies, id: \.self) { currency in
+                        totalTile(BankBalanceSummary(accounts: allAccounts.map(\.account), currency: currency,
+                            importedBalance: ImportedAccountBalance.balance(entries: imported, account: "Yonder", currency: currency)),
+                            currency: currency).frame(width: tileWidth)
+                    }
                     ForEach(items) { item in
                         NavigationLink {
                             TransactionsView(idPrefix: item.account.id)
@@ -1250,11 +1269,11 @@ private struct OverviewBalancesView: View {
                             accountTile(item).frame(width: tileWidth)
                         }.buttonStyle(.plain)
                     }
-                    if showYonder {
+                    ForEach(importedCurrencies, id: \.self) { currency in
                         NavigationLink {
                             YonderAccountView()
                         } label: {
-                            yonderTile(balance: yonderBalance).frame(width: tileWidth)
+                            yonderTile(balance: ImportedAccountBalance.balance(entries: imported, account: "Yonder", currency: currency), currency: currency).frame(width: tileWidth)
                         }.buttonStyle(.plain)
                     }
                 }.padding(.vertical, 8)
@@ -1263,10 +1282,10 @@ private struct OverviewBalancesView: View {
             .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         }
     }
-    private func yonderTile(balance: Decimal?) -> some View {
+    private func yonderTile(balance: Decimal?, currency: String) -> some View {
         VStack(spacing: 8) {
             BankLogo(provider: nil, fallback: "Y", size: logoSize).accessibilityHidden(true)
-            Text(balance.map { money($0) } ?? "—")
+            Text(balance.map { money($0, currency) } ?? "—")
                 .font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.65)
             if balance == nil {
                 Text("Balance unavailable")
@@ -1275,20 +1294,20 @@ private struct OverviewBalancesView: View {
         }.foregroundStyle(ink).multilineTextAlignment(.center)
             .frame(maxWidth: .infinity).contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Yonder, \(balance.map { money($0) } ?? "Balance unavailable"), calculated from this month’s imported transactions")
+            .accessibilityLabel("Yonder, \(balance.map { money($0, currency) } ?? "Balance unavailable"), calculated from this month’s imported transactions")
             .accessibilityHint("View or import Yonder transactions")
     }
-    private func totalTile(_ summary: BankBalanceSummary) -> some View {
+    private func totalTile(_ summary: BankBalanceSummary, currency: String) -> some View {
         VStack(spacing: 8) {
-            Image(systemName: "sterlingsign")
+            Text(currencySymbol(currency))
                 .font(.system(size: logoSize * 0.48, weight: .semibold))
                 .foregroundStyle(.white).frame(width: logoSize, height: logoSize)
                 .background(ink, in: Circle()).accessibilityHidden(true)
-            Text(summary.total.map { money($0) } ?? "—")
+            Text(summary.total.map { money($0, currency) } ?? "—")
                 .font(.subheadline.weight(.semibold)).lineLimit(1).minimumScaleFactor(0.65)
-            Text("Total balance").font(.caption.weight(.medium)).lineLimit(2)
+            Text("Total balance · \(currency)").font(.caption.weight(.medium)).lineLimit(2)
             if summary.total == nil {
-                Text(summary.accountCount == 0 ? "No GBP accounts" : "Balance unavailable")
+                Text(summary.accountCount == 0 ? "No \(currency) accounts" : "Balance unavailable")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }.foregroundStyle(ink).multilineTextAlignment(.center)
@@ -1561,7 +1580,7 @@ struct OverviewView: View {
                         .frame(maxWidth: 300)
                 }
             }
-            .sheet(isPresented: $editingBudgets) { BudgetEditingView(budgets: store.budgets) }
+            .sheet(isPresented: $editingBudgets) { BudgetEditingView(budgets: store.budgets, currency: store.budgetCurrency) }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
                 currentDate = Date()
             }
@@ -1572,11 +1591,11 @@ struct OverviewView: View {
     }
     private func monthPage(_ month: Date) -> some View {
         let expected = RecurringPayments.outstanding(store.visibleEntries, month: month, now: currentDate, merchantName: store.retailerName)
-            .filter { $0.currency == "GBP" }
+            .filter { $0.currency == store.budgetCurrency }
         let recurring = expected.reduce(Decimal.zero) { $0 + $1.magnitude - $1.reimbursedAmount }
-        let actual = BudgetMath.spending(store.visibleEntries, currency: "GBP", month: month)
+        let actual = BudgetMath.spending(store.visibleEntries, currency: store.budgetCurrency, month: month)
         let spent = actual + recurring
-        let confirmed = BudgetMath.spending(store.visibleEntries, currency: "GBP", month: month, includePending: false)
+        let confirmed = BudgetMath.spending(store.visibleEntries, currency: store.budgetCurrency, month: month, includePending: false)
         return VStack(alignment: .leading, spacing: 24) {
             if store.isDemo {
                 Label(store.isDemoSession ? "Demo data" : "Demo data · your bank data is not synced yet", systemImage: "sparkles")
@@ -1596,16 +1615,16 @@ struct OverviewView: View {
                     monthNavigationButton(-1)
                     VStack(alignment: .leading, spacing: 14) {
                         Text("SPENT THIS MONTH").font(.caption.weight(.semibold)).tracking(1.4)
-                        Text(money(spent)).font(.system(size: 42, weight: .medium, design: .rounded)).minimumScaleFactor(0.6).lineLimit(1)
+                        Text(money(spent, store.budgetCurrency)).font(.system(size: 42, weight: .medium, design: .rounded)).minimumScaleFactor(0.6).lineLimit(1)
                             .foregroundStyle(.white)
                         if actual != confirmed || recurring > 0 {
-                            Text("Includes \(money(actual - confirmed)) pending, \(money(recurring)) upcoming bills")
+                            Text("Includes \(money(actual - confirmed, store.budgetCurrency)) pending, \(money(recurring, store.budgetCurrency)) upcoming bills")
                                 .font(.caption).foregroundStyle(.white.opacity(0.75))
                         }
                         if total > 0 {
-                            Text(total >= spent ? "\(money(total - spent)) left in your budget" : "\(money(spent - total)) over your budget").font(.subheadline)
+                            Text(total >= spent ? "\(money(total - spent, store.budgetCurrency)) left in your budget" : "\(money(spent - total, store.budgetCurrency)) over your budget").font(.subheadline)
                                 .foregroundStyle(spent > total ? overBudget : .white)
-                            SpendingProgress(spent: spent, confirmed: confirmed, budget: total, color: spent > total ? overBudget : .white)
+                            SpendingProgress(spent: spent, confirmed: confirmed, budget: total, currency: store.budgetCurrency, color: spent > total ? overBudget : .white)
                         } else { Text("Tap Edit beside Budget view to set your budget.").font(.subheadline) }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     monthNavigationButton(1)
@@ -1626,32 +1645,32 @@ struct OverviewView: View {
             VStack(spacing: 20) {
                 ForEach(Category.spending, id: \.self) { category in
                     NavigationLink {
-                        TransactionsView(categoryFilter: category, monthFilter: month)
+                        TransactionsView(categoryFilter: category, monthFilter: month, currencyFilter: store.budgetCurrency)
                     } label: {
                         let reserved = expected.filter { $0.category == category }.reduce(Decimal.zero) { $0 + $1.magnitude - $1.reimbursedAmount }
-                        let used = BudgetMath.spending(store.visibleEntries, currency: "GBP", month: month, category: category) + reserved
-                        let confirmed = BudgetMath.spending(store.visibleEntries, currency: "GBP", month: month, category: category, includePending: false)
+                        let used = BudgetMath.spending(store.visibleEntries, currency: store.budgetCurrency, month: month, category: category) + reserved
+                        let confirmed = BudgetMath.spending(store.visibleEntries, currency: store.budgetCurrency, month: month, category: category, includePending: false)
                         let limit = store.budgets[category.rawValue, default: 0]
                         HStack(spacing: 14) {
                             Image(systemName: category.symbol).symbolVariant(.none).foregroundStyle(category.color).frame(width: 42, height: 42).background(paper, in: RoundedRectangle(cornerRadius: 14))
                             VStack(alignment: .leading, spacing: 7) {
                                 Text(category.rawValue).font(.subheadline.weight(.medium))
                                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                    Text(money(used)).font(.subheadline.monospacedDigit())
-                                        .accessibilityLabel("\(money(used)) spent")
+                                    Text(money(used, store.budgetCurrency)).font(.subheadline.monospacedDigit())
+                                        .accessibilityLabel("\(money(used, store.budgetCurrency)) spent")
                                     Spacer(minLength: 0)
                                     if limit > 0 {
                                         (Text(used > limit
-                                              ? "\(money(used - limit)) over"
-                                              : "\(money(limit - used)) left")
+                                              ? "\(money(used - limit, store.budgetCurrency)) over"
+                                              : "\(money(limit - used, store.budgetCurrency)) left")
                                             .foregroundColor(used > limit ? overBudget : .secondary)
-                                         + Text(" / \(money(limit))").foregroundColor(.secondary))
+                                         + Text(" / \(money(limit, store.budgetCurrency))").foregroundColor(.secondary))
                                             .font(.caption.monospacedDigit())
                                     } else {
                                         Text("No budget set").font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
-                                if limit > 0 { SpendingProgress(spent: used, confirmed: confirmed, budget: limit, color: used > limit ? overBudget : ink) }
+                                if limit > 0 { SpendingProgress(spent: used, confirmed: confirmed, budget: limit, currency: store.budgetCurrency, color: used > limit ? overBudget : ink) }
                             }
                         }.foregroundStyle(ink)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1660,7 +1679,7 @@ struct OverviewView: View {
                 }
             }.padding(20).background(.white, in: RoundedRectangle(cornerRadius: 24))
                 .padding(.horizontal, 22)
-            Text("Budgets are recurring monthly limits in GBP. Transfers, savings and income are excluded.").font(.caption).foregroundStyle(.secondary)
+            Text("Budgets are recurring monthly limits in \(store.budgetCurrency). Transfers, savings and income are excluded.").font(.caption).foregroundStyle(.secondary)
                 .padding(.horizontal, 22)
         }.padding(.vertical, 22)
     }
@@ -1697,6 +1716,7 @@ private struct SpendingProgress: View {
     let spent: Decimal
     let confirmed: Decimal
     let budget: Decimal
+    var currency: String = "GBP"
     let color: Color
 
     var body: some View {
@@ -1712,7 +1732,7 @@ private struct SpendingProgress: View {
         }
         .frame(height: 4)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(money(confirmed)) confirmed, \(money(spent - confirmed)) pending, \(money(budget)) budget")
+        .accessibilityLabel("\(money(confirmed, currency)) confirmed, \(money(spent - confirmed, currency)) pending, \(money(budget, currency)) budget")
     }
 }
 
@@ -1720,6 +1740,7 @@ struct BudgetEditingView: View {
     @EnvironmentObject private var store: BudgetStore
     @Environment(\.dismiss) private var dismiss
     @State private var amounts: [String: String]
+    @State private var currency: String
     @State private var validationError: String?
     private var totalBudget: Decimal? {
         var total = Decimal.zero
@@ -1732,7 +1753,8 @@ struct BudgetEditingView: View {
         return total
     }
 
-    init(budgets: [String: Decimal]) {
+    init(budgets: [String: Decimal], currency: String) {
+        _currency = State(initialValue: currency)
         _amounts = State(initialValue: Dictionary(uniqueKeysWithValues: Category.spending.map {
             ($0.rawValue, NSDecimalNumber(decimal: budgets[$0.rawValue, default: 0]).stringValue)
         }))
@@ -1741,22 +1763,33 @@ struct BudgetEditingView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if store.availableCurrencies.count > 1 {
+                    Section {
+                        Picker("Budget currency", selection: $currency) {
+                            ForEach(store.availableCurrencies, id: \.self) { code in
+                                Text("\(code) · \(Locale.current.localizedString(forCurrencyCode: code) ?? code)").tag(code)
+                            }
+                        }.pickerStyle(.menu)
+                    } footer: {
+                        Text("Only spending in this currency counts towards the budget. Changing currency keeps the amounts below; it does not convert them.")
+                    }
+                }
                 Section {
                     ForEach(Category.spending, id: \.self) { category in
                         HStack {
                             CategoryLabel(category: category)
                             Spacer()
-                            Text("£").foregroundStyle(.secondary)
+                            Text(currencySymbol(currency)).foregroundStyle(.secondary)
                             TextField("0", text: Binding(
                                 get: { amounts[category.rawValue, default: ""] },
                                 set: { amounts[category.rawValue] = $0 }
                             ))
                             .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                            .frame(width: 100).accessibilityLabel("\(category.rawValue) monthly budget in pounds")
+                            .frame(width: 100).accessibilityLabel("\(category.rawValue) monthly budget in \(currency)")
                         }
                     }
                 } footer: {
-                    Text("Recurring monthly limits in GBP. Set a category to zero to leave it without a budget.")
+                    Text("Recurring monthly limits in \(currency). Set a category to zero to leave it without a budget.")
                 }
             }
             .scrollContentBackground(.hidden).background(paper)
@@ -1765,7 +1798,7 @@ struct BudgetEditingView: View {
                 HStack {
                     Text("Total budget").font(.headline)
                     Spacer()
-                    Text(totalBudget.map { money($0) } ?? "—")
+                    Text(totalBudget.map { money($0, currency) } ?? "—")
                         .font(.headline.monospacedDigit())
                 }
                 .foregroundStyle(ink)
@@ -1793,6 +1826,7 @@ struct BudgetEditingView: View {
             }
             budgets[category.rawValue] = value
         }
+        store.preferredBudgetCurrency = currency
         store.budgets = budgets
         if store.save() { dismiss() }
     }
@@ -1852,6 +1886,7 @@ struct TransactionsView: View {
     var idPrefix: String? = nil
     var categoryFilter: Category? = nil
     var monthFilter: Date? = nil
+    var currencyFilter: String? = nil
     @EnvironmentObject private var store: BudgetStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var search = ""
@@ -1922,6 +1957,7 @@ struct TransactionsView: View {
             (accountFilter == nil || $0.account == accountFilter) &&
             (selectedAccount == nil || $0.account == selectedAccount) &&
             (categoryFilter == nil || $0.category == categoryFilter) &&
+            (currencyFilter == nil || $0.currency == currencyFilter) &&
             (monthFilter == nil || Calendar.current.isDate($0.date, equalTo: monthFilter!, toGranularity: .month)) &&
             (search.isEmpty || store.retailerName(for: $0).localizedCaseInsensitiveContains(search)
              || $0.description.localizedCaseInsensitiveContains(search)

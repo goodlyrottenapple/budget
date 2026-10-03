@@ -104,3 +104,17 @@ private func balanceAccount(_ id: String, _ balance: String?, currency: String =
     #expect(BankBalanceSummary(accounts: [], currency: "GBP", importedBalance: 0).total == 0)
     #expect(BankBalanceSummary(accounts: [balanceAccount("missing", nil)], currency: "GBP", importedBalance: -25).total == nil)
 }
+
+@Test func currencySelectionDetectsBalancesAndTransactionsWithoutMixingCurrencies() {
+    let accounts = [balanceAccount("euro", "100", currency: "EUR"),
+                    balanceAccount("dollar", nil, currency: "USD")]
+    let entries = [Entry(id: "gbp", date: Date(), description: "Purchase", amount: -10, account: "Yonder")]
+    let currencies = BudgetCurrency.detected(accounts: accounts, entries: entries)
+    #expect(currencies == ["EUR", "GBP", "USD"])
+    #expect(BudgetCurrency.selected(nil, available: currencies) == "GBP")
+    #expect(BudgetCurrency.selected("EUR", available: currencies) == "EUR")
+    #expect(BudgetCurrency.selected("USD", available: ["EUR"]) == "EUR")
+    #expect(BudgetCurrency.selected(nil, available: []) == "GBP")
+    #expect(BankBalanceSummary(accounts: accounts, currency: "EUR").total == 100)
+    #expect(BankBalanceSummary(accounts: accounts, currency: "USD").total == nil)
+}

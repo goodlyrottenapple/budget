@@ -96,8 +96,9 @@ public enum BudgetModels {
     @Model public final class Settings {
         @Attribute(.unique) public var id: String
         public var isDemo: Bool
-        public init(isDemo: Bool) {
-            id = "app"; self.isDemo = isDemo
+        public var budgetCurrency: String? = nil
+        public init(isDemo: Bool, budgetCurrency: String? = nil) {
+            id = "app"; self.isDemo = isDemo; self.budgetCurrency = budgetCurrency
         }
     }
 }
@@ -111,6 +112,7 @@ private func decodeStoredCategory(_ value: String) throws -> StoredCategory {
 
 /// Value state used by the UI; persisted as separate SwiftData records.
 public struct BudgetSnapshot {
+    public var budgetCurrency: String?
     public var entries: [Entry]
     public var budgets: [String: Decimal]
     public var isDemo: Bool
@@ -118,8 +120,9 @@ public struct BudgetSnapshot {
     public var merchantMatches: [String: MerchantMatch]
     public var merchantRules: [String: StoredCategory]
     public init(entries: [Entry], budgets: [String: Decimal], isDemo: Bool,
-                sources: [BankProvider] = [], merchantRules: [String: StoredCategory] = [:], merchantMatches: [String: MerchantMatch] = [:]) {
+                sources: [BankProvider] = [], merchantRules: [String: StoredCategory] = [:], merchantMatches: [String: MerchantMatch] = [:], budgetCurrency: String? = nil) {
         self.entries = entries; self.budgets = budgets; self.isDemo = isDemo
+        self.budgetCurrency = budgetCurrency
         self.sources = sources; self.merchantRules = merchantRules; self.merchantMatches = merchantMatches
     }
 }
@@ -166,7 +169,7 @@ public final class BudgetRepository {
         for record in try context.fetch(FetchDescriptor<BudgetModels.RetailerMatch>()) {
             matches[record.merchantKey] = try JSONDecoder().decode(MerchantMatch.self, from: record.metadata)
         }
-        return BudgetSnapshot(entries: entries, budgets: budgets, isDemo: settings.isDemo, sources: sources, merchantRules: rules, merchantMatches: matches)
+        return BudgetSnapshot(entries: entries, budgets: budgets, isDemo: settings.isDemo, sources: sources, merchantRules: rules, merchantMatches: matches, budgetCurrency: settings.budgetCurrency)
     }
 
     public func cachedRetailers(for query: String) throws -> [Retailer]? {
@@ -233,7 +236,8 @@ public final class BudgetRepository {
             }
             if let settings = try context.fetch(FetchDescriptor<BudgetModels.Settings>()).first {
                 settings.isDemo = snapshot.isDemo
-            } else { context.insert(BudgetModels.Settings(isDemo: snapshot.isDemo)) }
+                settings.budgetCurrency = snapshot.budgetCurrency
+            } else { context.insert(BudgetModels.Settings(isDemo: snapshot.isDemo, budgetCurrency: snapshot.budgetCurrency)) }
             try context.save()
         } catch {
             context.rollback()

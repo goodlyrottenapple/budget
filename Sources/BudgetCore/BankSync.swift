@@ -43,6 +43,18 @@ public struct BankBalanceSummary: Sendable {
     }
 }
 
+public enum BudgetCurrency {
+    public static func detected(accounts: [BankAccount], entries: [Entry]) -> [String] {
+        Set((accounts.map(\.currency) + entries.map(\.currency))
+            .map { $0.uppercased() }.filter { !$0.isEmpty }).sorted()
+    }
+
+    public static func selected(_ preference: String?, available: [String]) -> String {
+        if let preference, available.contains(preference) { return preference }
+        return available.contains("GBP") ? "GBP" : available.first ?? "GBP"
+    }
+}
+
 public enum ImportedAccountBalance {
     /// Nets this calendar month's imports through `asOf`, with no balance carried forward.
     /// Repayments and refunds count even when categorised as transfers or income.
