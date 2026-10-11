@@ -1882,6 +1882,8 @@ struct TransactionRow: View {
 
 struct TransactionsView: View {
     @EnvironmentObject private var syncPresentation: AccountSyncPresentation
+    @AppStorage("showInternalTransfers") private var showInternalTransfers = true
+    @AppStorage("showIncomingTransactions") private var showIncomingTransactions = true
     var accountFilter: String? = nil
     var idPrefix: String? = nil
     var categoryFilter: Category? = nil
@@ -1922,23 +1924,32 @@ struct TransactionsView: View {
         return "Account"
     }
     private var emptyDescription: String {
+        if !showInternalTransfers || !showIncomingTransactions {
+            return "No matching transactions. Check the visibility options in the ellipsis menu or adjust your filters."
+        }
         if categoryFilter != nil { return "No transactions in this category for the selected month, or matching your search." }
         if accountFilter == "Yonder" { return "Tap Import to add a CSV, or adjust your search." }
         return "Import a CSV from Accounts → Yonder, or adjust your search."
     }
+    @ViewBuilder
+    private func accountIcon(_ account: String?, provider: BankProvider? = nil) -> some View {
+        if let account {
+            let entry = store.visibleEntries.first {
+                $0.account == account && (idPrefix == nil || $0.id.hasPrefix(idPrefix!)) && $0.providerID != nil
+            }
+            let savedAccount = store.sources.compactMap { source in
+                store.bankAccounts[source.id]?.first(where: { $0.name == account }).map { (source, $0) }
+            }.first
+            BankLogo(provider: provider ?? entry.flatMap { store.provider(for: $0) } ?? savedAccount?.0,
+                     fallback: account == "Yonder" ? "Y" : "B", size: 24,
+                     accountKind: linkedAccount?.account.kind ?? entry?.bankAccountKind ?? savedAccount?.1.kind)
+        } else {
+            Image(systemName: "building.columns").frame(width: 24, height: 24)
+        }
+    }
     private func accountLabel(_ account: String?, compact: Bool = false, provider: BankProvider? = nil) -> some View {
         HStack(spacing: 8) {
-            if let account {
-                let entry = store.visibleEntries.first {
-                    $0.account == account && (idPrefix == nil || $0.id.hasPrefix(idPrefix!)) && $0.providerID != nil
-                }
-                BankLogo(provider: provider ?? entry.flatMap { store.provider(for: $0) },
-                         fallback: account == "Yonder" ? "Y" : "B", size: 24,
-                         accountKind: linkedAccount?.account.kind ?? entry?.bankAccountKind)
-                    .allowsHitTesting(false).accessibilityHidden(true)
-            } else {
-                Image(systemName: "building.columns").frame(width: 24, height: 24)
-            }
+            accountIcon(account, provider: provider).accessibilityHidden(true)
             Text(compact ? (account ?? "All accounts").uppercased() : account ?? "All accounts")
                 .font(compact ? .caption.weight(.semibold) : .subheadline)
                 .tracking(compact ? 1.4 : 0)
@@ -1953,6 +1964,8 @@ struct TransactionsView: View {
     }
     private var filtered: [Entry] {
         store.visibleEntries.filter {
+            (showInternalTransfers || $0.category != .transfer) &&
+            (showIncomingTransactions || $0.amount <= 0) &&
             (idPrefix == nil || $0.id.hasPrefix(idPrefix!)) &&
             (accountFilter == nil || $0.account == accountFilter) &&
             (selectedAccount == nil || $0.account == selectedAccount) &&
@@ -1982,14 +1995,7 @@ struct TransactionsView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    if canSelectAccount {
-                        accountControls
-                    } else {
-                        accountLabel(fixedAccountName, compact: true, provider: linkedAccount?.provider)
-                            .foregroundStyle(ink)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .accessibilityElement(children: .combine)
-                    }
+
                 }
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                 .listRowBackground(Color.clear)
@@ -2053,7 +2059,37 @@ struct TransactionsView: View {
                         AccountSyncStatus(presentation: syncPresentation)
                             .frame(maxWidth: 260)
                     }
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        Menu {
+                            Button {
+                                showInternalTransfers.toggle()
+                            } label: {
+                                Label {
+                                    Text(showInternalTransfers ? "Hide internal txns" : "Show internal txns")
+                                } icon: {
+                                    visibilityIcon(.transfer, isShown: showInternalTransfers)
+                                }
+                            }
+                            Button {
+                                showIncomingTransactions.toggle()
+                            } label: {
+                                Label {
+                                    Text(showIncomingTransactions ? "Hide incoming txns" : "Show incoming txns")
+                                } icon: {
+                                    visibilityIcon(.income, isShown: showIncomingTransactions)
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                        }
+                        .accessibilityLabel("Transaction options")
+                        .accessibilityValue("\(showInternalTransfers ? "Internal transfers shown" : "Internal transfers hidden"), \(showIncomingTransactions ? "Incoming transactions shown" : "Incoming transactions hidden")")
+                        if canSelectAccount {
+                            accountControls
+                        } else {
+                            accountIcon(fixedAccountName, provider: linkedAccount?.provider)
+                                .accessibilityLabel("Account, \(fixedAccountName)")
+                        }
                         Button {
                             if showingSearch {
                                 searchFocused = false
@@ -2082,6 +2118,15 @@ struct TransactionsView: View {
                 }
         }
     }
+    private func visibilityIcon(_ category: Category, isShown: Bool) -> Image {
+        // Native menus can discard SwiftUI foreground styles. Bake the tint into
+        // an original-rendering symbol so its visibility state survives bridging.
+        let tint = UIColor(category.color).withAlphaComponent(isShown ? 1 : 0.3)
+        let symbol = UIImage(systemName: category.symbol,
+                             withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .medium))
+        return Image(uiImage: symbol?.withTintColor(tint, renderingMode: .alwaysOriginal) ?? UIImage())
+            .renderingMode(.original)
+    }
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -2106,17 +2151,10 @@ struct TransactionsView: View {
             searchFocused = false
             showingAccounts = true
         } label: {
-            HStack(spacing: 6) {
-                accountLabel(selectedAccount, compact: true)
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.down").font(.caption.weight(.semibold))
-            }
-            .foregroundStyle(ink)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .contentShape(Rectangle())
+            accountIcon(selectedAccount)
+                .foregroundStyle(ink)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Account, \(selectedAccount ?? "All accounts")")
+        .accessibilityLabel("Select account, \(selectedAccount ?? "All accounts")")
         .popover(isPresented: $showingAccounts, arrowEdge: .top) {
             ScrollView {
                 VStack(spacing: 0) {
