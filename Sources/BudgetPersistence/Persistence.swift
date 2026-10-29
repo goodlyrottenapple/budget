@@ -97,6 +97,8 @@ public enum BudgetModels {
         @Attribute(.unique) public var id: String
         public var isDemo: Bool
         public var budgetCurrency: String? = nil
+        public var deletedTransactions: Data? = nil
+        public var accountContinuations: Data? = nil
         public init(isDemo: Bool, budgetCurrency: String? = nil) {
             id = "app"; self.isDemo = isDemo; self.budgetCurrency = budgetCurrency
         }
@@ -112,6 +114,8 @@ private func decodeStoredCategory(_ value: String) throws -> StoredCategory {
 
 /// Value state used by the UI; persisted as separate SwiftData records.
 public struct BudgetSnapshot {
+    public var accountContinuations: [String: String]
+    public var deletedTransactions: [Entry]
     public var budgetCurrency: String?
     public var entries: [Entry]
     public var budgets: [String: Decimal]
@@ -120,7 +124,9 @@ public struct BudgetSnapshot {
     public var merchantMatches: [String: MerchantMatch]
     public var merchantRules: [String: StoredCategory]
     public init(entries: [Entry], budgets: [String: Decimal], isDemo: Bool,
-                sources: [BankProvider] = [], merchantRules: [String: StoredCategory] = [:], merchantMatches: [String: MerchantMatch] = [:], budgetCurrency: String? = nil) {
+                sources: [BankProvider] = [], merchantRules: [String: StoredCategory] = [:], merchantMatches: [String: MerchantMatch] = [:], budgetCurrency: String? = nil, deletedTransactions: [Entry] = [], accountContinuations: [String: String] = [:]) {
+        self.accountContinuations = accountContinuations
+        self.deletedTransactions = deletedTransactions
         self.entries = entries; self.budgets = budgets; self.isDemo = isDemo
         self.budgetCurrency = budgetCurrency
         self.sources = sources; self.merchantRules = merchantRules; self.merchantMatches = merchantMatches
@@ -169,7 +175,9 @@ public final class BudgetRepository {
         for record in try context.fetch(FetchDescriptor<BudgetModels.RetailerMatch>()) {
             matches[record.merchantKey] = try JSONDecoder().decode(MerchantMatch.self, from: record.metadata)
         }
-        return BudgetSnapshot(entries: entries, budgets: budgets, isDemo: settings.isDemo, sources: sources, merchantRules: rules, merchantMatches: matches, budgetCurrency: settings.budgetCurrency)
+        return BudgetSnapshot(entries: entries, budgets: budgets, isDemo: settings.isDemo, sources: sources, merchantRules: rules, merchantMatches: matches, budgetCurrency: settings.budgetCurrency,
+                              deletedTransactions: try settings.deletedTransactions.map { try JSONDecoder().decode([Entry].self, from: $0) } ?? [],
+                              accountContinuations: try settings.accountContinuations.map { try JSONDecoder().decode([String: String].self, from: $0) } ?? [:])
     }
 
     public func cachedRetailers(for query: String) throws -> [Retailer]? {
@@ -234,10 +242,17 @@ public final class BudgetRepository {
                 if let record = sourceMap[source.id] { record.metadata = metadata }
                 else { context.insert(BudgetModels.Source(id: source.id, metadata: metadata)) }
             }
-            if let settings = try context.fetch(FetchDescriptor<BudgetModels.Settings>()).first {
-                settings.isDemo = snapshot.isDemo
-                settings.budgetCurrency = snapshot.budgetCurrency
-            } else { context.insert(BudgetModels.Settings(isDemo: snapshot.isDemo, budgetCurrency: snapshot.budgetCurrency)) }
+            let settings: BudgetModels.Settings
+            if let existing = try context.fetch(FetchDescriptor<BudgetModels.Settings>()).first {
+                settings = existing
+            } else {
+                settings = BudgetModels.Settings(isDemo: snapshot.isDemo)
+                context.insert(settings)
+            }
+            settings.isDemo = snapshot.isDemo
+            settings.budgetCurrency = snapshot.budgetCurrency
+            settings.deletedTransactions = try JSONEncoder().encode(snapshot.deletedTransactions)
+            settings.accountContinuations = try JSONEncoder().encode(snapshot.accountContinuations)
             try context.save()
         } catch {
             context.rollback()

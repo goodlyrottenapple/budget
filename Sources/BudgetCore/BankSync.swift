@@ -345,3 +345,67 @@ public struct DemoDataset {
         accounts = balances
     }
 }
+
+/// User-confirmed removals survive imports without merging unrelated purchases.
+public enum TransactionExclusions {
+    public static func applying(_ deleted: [Entry], to entries: [Entry]) -> [Entry] {
+        func stableIdentity(_ entry: Entry) -> String {
+            entry.id.replacingOccurrences(of: ":pending:stable:", with: ":stable:")
+        }
+        let deletedIDs = Set(deleted.map(\.id))
+        let deletedStableIDs = Set(deleted.map(stableIdentity))
+        let incomingIDs = Set(entries.map(\.id))
+        var hidden = deletedIDs
+        func requestKey(_ entry: Entry) -> String? {
+            let parts = entry.id.split(separator: ":", maxSplits: 4).map(String.init)
+            guard parts.count == 5, parts[0] == "truelayer" else { return nil }
+            let suffix = parts[4].hasPrefix("pending:") ? String(parts[4].dropFirst(8)) : parts[4]
+            guard suffix.hasPrefix("request:") else { return nil }
+            // Encode fields to avoid delimiter collisions in bank descriptions.
+            let fields = Array(parts.prefix(4)) + [String(entry.isPending), String(entry.date.timeIntervalSince1970),
+                NSDecimalNumber(decimal: entry.amount).stringValue, entry.currency, entry.description, entry.merchant]
+            return (try? JSONEncoder().encode(fields)).map { $0.base64EncodedString() }
+        }
+        let candidates = Dictionary(grouping: entries.filter { !deletedIDs.contains($0.id) }, by: requestKey)
+        let missing = Dictionary(grouping: deleted.filter { !incomingIDs.contains($0.id) }, by: requestKey)
+        for (key, removals) in missing {
+            guard let key, removals.count == 1, let matches = candidates[key], matches.count == 1 else { continue }
+            hidden.insert(matches[0].id)
+        }
+        return entries.filter { !hidden.contains($0.id) && !deletedStableIDs.contains(stableIdentity($0)) }
+    }
+}
+
+/// Links account identities without changing the bank's transaction identifiers.
+public enum AccountContinuations {
+    public static func prefix(for transactionID: String) -> String? {
+        let parts = transactionID.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
+        guard parts.count == 5, parts[0] == "truelayer", !parts[3].isEmpty else { return nil }
+        return parts.prefix(4).joined(separator: ":") + ":"
+    }
+
+    public static func resolved(_ accountID: String, links: [String: String]) -> String {
+        var current = accountID
+        var seen = Set<String>()
+        while let next = links[current] {
+            guard seen.insert(current).inserted else { return accountID }
+            current = next
+        }
+        return current
+    }
+
+    public static func canLink(_ old: BankAccount, to replacement: BankAccount, links: [String: String]) -> Bool {
+        let oldParts = old.id.split(separator: ":")
+        let newParts = replacement.id.split(separator: ":")
+        guard oldParts.count == 4, newParts.count == 4,
+              oldParts[0] == "truelayer", newParts[0] == "truelayer",
+              oldParts[1] == newParts[1], old.kind == replacement.kind,
+              old.currency.uppercased() == replacement.currency.uppercased(), old.id != replacement.id else { return false }
+        return resolved(replacement.id, links: links) != old.id
+    }
+
+    public static func contains(_ entry: Entry, in accountID: String, links: [String: String]) -> Bool {
+        guard let prefix = prefix(for: entry.id) else { return false }
+        return resolved(prefix, links: links) == resolved(accountID, links: links)
+    }
+}

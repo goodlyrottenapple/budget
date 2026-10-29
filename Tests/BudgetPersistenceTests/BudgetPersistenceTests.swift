@@ -6,6 +6,46 @@ import BudgetCore
 
 @MainActor
 final class BudgetPersistenceTests: XCTestCase {
+    func testAccountContinuationsSurviveReopeningAndCanBeUnlinked() throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("Budget.store")
+        let old = "truelayer:bank:cards:old:"
+        let new = "truelayer:bank:cards:new:"
+        let entry = Entry(id: old + "stable:one", date: Date(), description: "Purchase", amount: -36, account: "Old card")
+        var repository: BudgetRepository? = try BudgetRepository(storeURL: url)
+        try repository?.save(BudgetSnapshot(entries: [entry], budgets: [:], isDemo: false,
+                                           accountContinuations: [old: new]))
+        repository = nil
+        let reopened = try BudgetRepository(storeURL: url)
+        var state = try XCTUnwrap(reopened.load())
+        XCTAssertEqual(state.accountContinuations, [old: new])
+        XCTAssertEqual(state.entries.first?.id, entry.id)
+        XCTAssertEqual(state.entries.first?.account, "Old card")
+        state.accountContinuations = [:]
+        try reopened.save(state)
+        XCTAssertEqual(try reopened.load()?.accountContinuations, [:])
+    }
+
+    func testDeletedTransactionsSurviveReopeningAndBlockReimport() throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("Budget.store")
+        let deleted = Entry(id: "truelayer:bank:cards:old:stable:one", date: Date(),
+                            description: "Incorrect payment", amount: -36, account: "Card")
+        let kept = Entry(id: "truelayer:bank:cards:new:stable:two", date: Date(),
+                         description: "Correct payment", amount: -36, account: "Card")
+        var repository: BudgetRepository? = try BudgetRepository(storeURL: url)
+        try repository?.save(BudgetSnapshot(entries: [kept], budgets: [:], isDemo: false,
+                                           deletedTransactions: [deleted]))
+        repository = nil
+        let reopened = try BudgetRepository(storeURL: url)
+        let state = try XCTUnwrap(reopened.load())
+        XCTAssertEqual(state.entries.map(\.id), [kept.id])
+        XCTAssertEqual(state.deletedTransactions.map(\.id), [deleted.id])
+        XCTAssertEqual(TransactionExclusions.applying(state.deletedTransactions, to: [deleted, kept]).map(\.id), [kept.id])
+    }
+
     func testBudgetCurrencySurvivesReopeningAndLegacyDefaultIsUnset() throws {
         let directory = try directory()
         defer { try? FileManager.default.removeItem(at: directory) }

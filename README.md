@@ -107,6 +107,22 @@ Run the same deploy command to publish callback updates. Only `Web/BankCallback/
 
 Pull down in Overview or Accounts to sync. A bank's detail screen also has a sync control. When consent expires or a bank requires renewed access, use **Reconnect with bank** and repeat the approval journey; normal reconnection does not require copying a URL.
 
+### Replacement cards and account history
+
+In **Accounts → your bank → Link previous account or card**, select the replacement
+account and enable its previous account. Only accounts from the same bank, of the
+same type and currency, can be linked. Linked history appears under the replacement
+in transaction lists and account filters, with only the replacement balance included
+in the overview. Original transaction IDs and stored account names remain intact;
+future syncs and saved deletion exclusions still use them. Turn the link off to
+separate the histories again. Linking does not automatically remove duplicates.
+
+To remove an incorrect transaction, open its details and choose **Delete transaction**.
+A locally saved exclusion blocks its ID on future syncs/imports. Changing request
+IDs are matched only when the same account, timestamp, amount, currency and original
+merchant/description identify one unambiguous record. If the provider changes all
+these identifiers/details, the app cannot safely recognise it as the same payment.
+
 ### How the callback and tokens work
 
 ```text

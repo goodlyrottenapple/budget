@@ -1,3 +1,4 @@
+import Testing
 import Foundation
 import XCTest
 @testable import BudgetCore
@@ -119,4 +120,28 @@ final class BankSyncTests: XCTestCase {
         XCTAssertEqual(result[0].providerID, "ob-amex")
         XCTAssertEqual(try BankSync.date("2026-09-10T12:00:00"), try BankSync.date("2026-09-10T12:00:00Z"))
     }
+}
+
+@Test func deletedTransactionsStayExcludedWithoutRemovingOtherAccountsOrDates() {
+    let now = Date()
+    func entry(_ id: String, date: Date? = nil) -> Entry {
+        Entry(id: id, date: date ?? now, description: "Purchase", amount: -36, account: "Card", providerID: "bank")
+    }
+    let removed = entry("truelayer:bank:cards:old:stable:one")
+    let correct = entry("truelayer:bank:cards:new:stable:two")
+    #expect(TransactionExclusions.applying([removed], to: [removed, correct]).map(\.id) == [correct.id])
+    let request = entry("truelayer:bank:cards:old:request:one")
+    let refreshed = entry("truelayer:bank:cards:old:request:two")
+    let later = entry("truelayer:bank:cards:old:request:later", date: now.addingTimeInterval(86400))
+    #expect(TransactionExclusions.applying([request], to: [refreshed, later, correct]).map(\.id) == [later.id, correct.id])
+    // An exact ID match must not also hide an identical legitimate purchase.
+    #expect(TransactionExclusions.applying([request], to: [request, refreshed]).map(\.id) == [refreshed.id])
+    let ambiguous = entry("truelayer:bank:cards:old:request:three")
+    #expect(TransactionExclusions.applying([request], to: [refreshed, ambiguous]).count == 2)
+    #expect(TransactionExclusions.applying([], to: [request]).count == 1)
+    var pending = entry("truelayer:bank:cards:old:pending:stable:one")
+    pending.pending = true
+    #expect(TransactionExclusions.applying([pending], to: [removed]).isEmpty)
+    let imported = entry("csv:one")
+    #expect(TransactionExclusions.applying([imported], to: [imported]).isEmpty)
 }

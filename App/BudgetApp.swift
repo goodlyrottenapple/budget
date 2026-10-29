@@ -278,7 +278,7 @@ struct BankSourceView: View {
                 }
                 if let accounts = store.bankAccounts[provider.id], !accounts.isEmpty {
                     Section {
-                        ForEach(accounts) { account in
+                        ForEach(accounts.filter { store.accountContinuations[$0.id] == nil }) { account in
                             NavigationLink {
                                 TransactionsView(accountFilter: nil, idPrefix: account.id)
                             } label: {
@@ -292,6 +292,11 @@ struct BankSourceView: View {
                             }
                         }
                     } header: { sectionHeading("Accounts and cards") }
+                    Section {
+                        NavigationLink("Link previous account or card") {
+                            AccountContinuationView(provider: provider)
+                        }
+                    }
                 }
                 if developerMode, let report = store.bankCategoryReports[provider.id] {
                     Section {
@@ -392,6 +397,67 @@ struct BankSourceView: View {
     }
 }
 
+private struct AccountContinuationView: View {
+    let provider: BankProvider
+    @EnvironmentObject private var store: BudgetStore
+    @State private var selectedID: String?
+    @State private var failed = false
+    private var currentAccounts: [BankAccount] {
+        (store.bankAccounts[provider.id] ?? []).filter { store.accountContinuations[$0.id] == nil }
+    }
+    private var selected: BankAccount? {
+        currentAccounts.first { $0.id == selectedID } ?? currentAccounts.first
+    }
+    var body: some View {
+        Form {
+            Section {
+                Picker("Replacement account", selection: Binding(
+                    get: { selected?.id ?? "" }, set: { selectedID = $0 }
+                )) {
+                    ForEach(currentAccounts) { account in
+                        Text("\(account.name) · \(account.currency)").tag(account.id)
+                    }
+                }
+            } footer: {
+                Text("Choose the current account or replacement card, then link its previous account below.")
+            }
+            if let selected {
+                let candidates = store.knownAccounts(providerID: provider.id).filter {
+                    AccountContinuations.canLink($0, to: selected, links: store.accountContinuations)
+                }
+                Section {
+                    if candidates.isEmpty { Text("No previous accounts with the same type and currency.").foregroundStyle(.secondary) }
+                    ForEach(candidates) { old in
+                        Toggle(isOn: Binding(
+                            get: { store.accountContinuations[old.id] != nil && AccountContinuations.resolved(old.id, links: store.accountContinuations) == selected.id },
+                            set: { enabled in
+                                if !store.setContinuation(old, to: enabled ? selected : nil) { failed = true }
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(old.name)
+                                Text("\(old.currency) · \(store.entries.filter { AccountContinuations.prefix(for: $0.id) == old.id }.count) saved transactions")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                if let target = store.accountContinuations[old.id], AccountContinuations.resolved(target, links: store.accountContinuations) != selected.id {
+                                    Text("Linked to another account").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }.tint(ink)
+                        .disabled(store.accountContinuations[old.id] != nil && AccountContinuations.resolved(old.id, links: store.accountContinuations) != selected.id)
+                    }
+                } header: { Text("Previous accounts") } footer: {
+                    Text("Linked history appears under the replacement account. Only its current balance is shown. Transactions and original IDs are preserved; this does not delete duplicates. Turn a link off to separate the history again.")
+                }
+            }
+        }
+        .scrollContentBackground(.hidden).background(paper)
+        .navigationTitle("Account continuation").navigationBarTitleDisplayMode(.inline)
+        .alert("Could not save account link", isPresented: $failed) {
+            Button("OK", role: .cancel) { }
+        } message: { Text("Your account links were not changed. Please try again.") }
+    }
+}
+
 private struct BankTransactionCheckView: View {
     let provider: BankProvider
     @EnvironmentObject private var store: BudgetStore
@@ -453,6 +519,8 @@ final class BudgetStore: ObservableObject {
     private var completingBankAuthorisation = false
     private let bankAuthorisationSession = BankAuthorisationSession()
     @Published var entries: [Entry] = []
+    private var deletedTransactions: [Entry] = []
+    @Published private(set) var accountContinuations: [String: String] = [:]
     @Published var budgets: [String: Decimal] = [:]
     @Published var preferredBudgetCurrency: String?
     var availableCurrencies: [String] {
@@ -516,7 +584,44 @@ final class BudgetStore: ObservableObject {
     }
 
     var visibleEntries: [Entry] {
-        TransferMatching.apply(to: entries.filter { $0.amount != 0 }, rules: merchantRules)
+        TransferMatching.apply(to: entries.filter { $0.amount != 0 }.map { entry in
+            var displayed = entry
+            displayed.account = accountDisplayName(for: entry)
+            return displayed
+        }, rules: merchantRules)
+    }
+
+    func knownAccounts(providerID: String) -> [BankAccount] {
+        var accounts = Dictionary(uniqueKeysWithValues: (bankAccounts[providerID] ?? []).map { ($0.id, $0) })
+        let historical = Dictionary(grouping: entries.filter { $0.providerID == providerID }, by: { AccountContinuations.prefix(for: $0.id) })
+        for (id, rows) in historical {
+            guard let id, accounts[id] == nil, let latest = rows.max(by: { $0.date < $1.date }) else { continue }
+            let parts = id.split(separator: ":")
+            accounts[id] = BankAccount(id: id, name: latest.account, kind: String(parts[2]), currency: latest.currency,
+                                       current: nil, transactionCount: rows.count)
+        }
+        return accounts.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func originalAccountName(for entry: Entry) -> String {
+        entries.first(where: { $0.id == entry.id })?.account ?? entry.account
+    }
+
+    func accountDisplayName(for entry: Entry) -> String {
+        guard let prefix = AccountContinuations.prefix(for: entry.id), accountContinuations[prefix] != nil else { return entry.account }
+        let target = AccountContinuations.resolved(prefix, links: accountContinuations)
+        return bankAccounts.values.flatMap { $0 }.first(where: { $0.id == target })?.name
+            ?? entries.first(where: { AccountContinuations.prefix(for: $0.id) == target })?.account ?? entry.account
+    }
+
+    func setContinuation(_ old: BankAccount, to replacement: BankAccount?) -> Bool {
+        let previous = accountContinuations
+        if let replacement {
+            guard AccountContinuations.canLink(old, to: replacement, links: previous) else { return false }
+            accountContinuations[old.id] = replacement.id
+        } else { accountContinuations.removeValue(forKey: old.id) }
+        guard save() else { accountContinuations = previous; return false }
+        return true
     }
 
     var offlineAccounts: [String] {
@@ -526,12 +631,14 @@ final class BudgetStore: ObservableObject {
     }
 
     private var snapshot: BudgetSnapshot {
-        BudgetSnapshot(entries: entries, budgets: budgets, isDemo: isDemo, sources: sources, merchantRules: merchantRules, merchantMatches: merchantMatches, budgetCurrency: preferredBudgetCurrency)
+        BudgetSnapshot(entries: entries, budgets: budgets, isDemo: isDemo, sources: sources, merchantRules: merchantRules, merchantMatches: merchantMatches, budgetCurrency: preferredBudgetCurrency, deletedTransactions: deletedTransactions, accountContinuations: accountContinuations)
     }
 
     private func restore(_ state: BudgetSnapshot) {
         entries = state.entries; budgets = state.budgets; isDemo = state.isDemo
         preferredBudgetCurrency = state.budgetCurrency
+        deletedTransactions = state.deletedTransactions
+        accountContinuations = state.accountContinuations
         sources = state.sources; merchantRules = state.merchantRules; merchantMatches = state.merchantMatches
     }
 
@@ -796,7 +903,7 @@ final class BudgetStore: ObservableObject {
         if !result.warnings.isEmpty { bankSyncWarnings.insert(provider.id) }
         let merged = try result.merging(into: isDemo ? [] : entries, rules: merchantRules)
         if isDemo { budgets = [:]; isDemo = false }
-        entries = merged
+        entries = TransactionExclusions.applying(deletedTransactions, to: merged)
         guard save() else { throw CSVError.invalid("Bank data could not be saved. Try syncing again.") }
         try bankService.recordSuccessfulSync(result)
         Task { await self.recogniseMerchants() }
@@ -955,6 +1062,21 @@ final class BudgetStore: ObservableObject {
         save()
     }
 
+    func deleteTransaction(id: String) -> Bool {
+        guard isDemoSession || repository != nil,
+              let entry = entries.first(where: { $0.id == id }) else { return false }
+        let previousEntries = entries
+        let previousDeleted = deletedTransactions
+        if !deletedTransactions.contains(where: { $0.id == id }) { deletedTransactions.append(entry) }
+        entries.removeAll { $0.id == id }
+        guard save() else {
+            entries = previousEntries
+            deletedTransactions = previousDeleted
+            return false
+        }
+        return true
+    }
+
     func setNotes(transactionID: String, notes: String) {
         guard let index = entries.firstIndex(where: { $0.id == transactionID }) else { return }
         let value = notes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1018,7 +1140,7 @@ final class BudgetStore: ObservableObject {
         var ids = Set(entries.map(\.id))
         let additions = pending.filter { ids.insert($0.id).inserted }
             .map { Categorisation.apply(to: $0, rules: merchantRules) }
-        entries.append(contentsOf: additions)
+        entries.append(contentsOf: TransactionExclusions.applying(deletedTransactions, to: additions))
         entries.sort { $0.date > $1.date }
         guard save() else { return }
         Task { await self.recogniseMerchants() }
@@ -1227,7 +1349,7 @@ private struct OverviewBalancesView: View {
     }
     private var accounts: [AccountItem] {
         store.sources.flatMap { provider in
-            (store.bankAccounts[provider.id] ?? []).map { AccountItem(provider: provider, account: $0) }
+            (store.bankAccounts[provider.id] ?? []).filter { store.accountContinuations[$0.id] == nil }.map { AccountItem(provider: provider, account: $0) }
         }
     }
     private var updatedText: String? {
@@ -1867,8 +1989,8 @@ struct TransactionRow: View {
                 TransactionAmount(entry: entry, showsReimbursement: true).font(.subheadline.monospacedDigit())
                     .fixedSize(horizontal: true, vertical: false)
                 HStack(spacing: 5) {
-                    Text(entry.account).font(.caption).foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.tail)
+                    Text(store.originalAccountName(for: entry)).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
                     BankLogo(provider: store.provider(for: entry), fallback: entry.account == "Yonder" ? "Y" : "B", size: 16, accountKind: entry.bankAccountKind)
                         .accessibilityHidden(true)
                 }
@@ -1935,7 +2057,7 @@ struct TransactionsView: View {
     private func accountIcon(_ account: String?, provider: BankProvider? = nil) -> some View {
         if let account {
             let entry = store.visibleEntries.first {
-                $0.account == account && (idPrefix == nil || $0.id.hasPrefix(idPrefix!)) && $0.providerID != nil
+                $0.account == account && (idPrefix == nil || AccountContinuations.contains($0, in: idPrefix!, links: store.accountContinuations)) && $0.providerID != nil
             }
             let savedAccount = store.sources.compactMap { source in
                 store.bankAccounts[source.id]?.first(where: { $0.name == account }).map { (source, $0) }
@@ -1958,7 +2080,7 @@ struct TransactionsView: View {
         }
     }
     private var accounts: [String] {
-        Set(store.visibleEntries.filter { idPrefix == nil || $0.id.hasPrefix(idPrefix!) }.map(\.account))
+        Set(store.visibleEntries.filter { idPrefix == nil || AccountContinuations.contains($0, in: idPrefix!, links: store.accountContinuations) }.map(\.account))
             .union(store.offlineAccounts)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
@@ -1966,7 +2088,7 @@ struct TransactionsView: View {
         store.visibleEntries.filter {
             (showInternalTransfers || $0.category != .transfer) &&
             (showIncomingTransactions || $0.amount <= 0) &&
-            (idPrefix == nil || $0.id.hasPrefix(idPrefix!)) &&
+            (idPrefix == nil || AccountContinuations.contains($0, in: idPrefix!, links: store.accountContinuations)) &&
             (accountFilter == nil || $0.account == accountFilter) &&
             (selectedAccount == nil || $0.account == selectedAccount) &&
             (categoryFilter == nil || $0.category == categoryFilter) &&
@@ -2191,6 +2313,10 @@ struct TransactionsView: View {
 }
 
 struct TransactionDetailView: View {
+    @AppStorage("developerModeEnabled") private var developerMode = false
+    @State private var copiedIdentifiers = false
+    @State private var confirmingDeletion = false
+    @State private var deletionFailed = false
     let transactionID: String
     @EnvironmentObject private var store: BudgetStore
     @Environment(\.dismiss) private var dismiss
@@ -2261,6 +2387,24 @@ struct TransactionDetailView: View {
         .accessibilityLabel("\(title), \(value)")
     }
 
+    private func identifierFields(for entry: Entry) -> [(title: String, value: String)] {
+        var fields = [(title: "Saved transaction ID", value: entry.id),
+                      (title: "Status", value: entry.isPending ? "Pending" : "Settled")]
+        let parts = entry.id.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 5, parts[0] == "truelayer" else { return fields }
+        fields += [("Provider ID", parts[1]), ("Account type", parts[2]), ("Account/card ID", parts[3])]
+        var suffix = parts[4]
+        if suffix.hasPrefix("pending:") { suffix.removeFirst("pending:".count) }
+        if suffix.hasPrefix("stable:") {
+            fields.append(("Normalised provider transaction ID", String(suffix.dropFirst("stable:".count))))
+        } else if suffix.hasPrefix("request:") {
+            fields.append(("TrueLayer transaction ID (may change)", String(suffix.dropFirst("request:".count))))
+        } else {
+            fields.append(("Transaction ID component (legacy)", suffix))
+        }
+        return fields
+    }
+
     @discardableResult
     private func saveReimbursement() -> Bool {
         guard let entry else { return false }
@@ -2307,7 +2451,7 @@ struct TransactionDetailView: View {
                             HStack(spacing: 6) {
                                 BankLogo(provider: store.provider(for: entry), fallback: entry.account == "Yonder" ? "Y" : "B", size: 20, accountKind: entry.bankAccountKind)
                                     .accessibilityHidden(true)
-                                Text(entry.account).font(.subheadline).foregroundStyle(.secondary)
+                                Text(store.originalAccountName(for: entry)).font(.subheadline).foregroundStyle(.secondary)
                             }
                         }.frame(maxWidth: .infinity).padding(.vertical, 12)
                     }.listRowBackground(Color.clear)
@@ -2403,6 +2547,29 @@ struct TransactionDetailView: View {
                         informationField("Merchant", value: entry.merchant)
                         informationField("Description", value: entry.description)
                     } header: { sectionHeading("Transaction details") }
+                    if developerMode {
+                        Section {
+                            ForEach(identifierFields(for: entry), id: \.title) { field in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    sectionHeading(field.title)
+                                    Text(field.value)
+                                        .font(.caption.monospaced())
+                                        .textSelection(.enabled)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }.padding(.vertical, 4)
+                            }
+                            Button {
+                                UIPasteboard.general.string = identifierFields(for: entry)
+                                    .map { "\($0.title): \($0.value)" }.joined(separator: "\n")
+                                copiedIdentifiers = true
+                            } label: {
+                                Label(copiedIdentifiers ? "Copied identifiers" : "Copy identifiers",
+                                      systemImage: copiedIdentifiers ? "checkmark" : "doc.on.doc")
+                            }
+                        } header: { sectionHeading("Developer identifiers") } footer: {
+                            Text("These are the identifiers saved with this transaction. When a normalised provider ID is available, the separate TrueLayer request ID is not retained. Compare both copies’ account/card IDs and transaction IDs.")
+                        }
+                    }
                     Section {
                         let summary = MerchantSummary(entries: store.entries,
                             merchantName: store.retailerName(for: entry), displayName: { store.retailerName(for: $0) })
@@ -2439,6 +2606,11 @@ struct TransactionDetailView: View {
                             } footer: { Text("Removing the rule stops it applying to future imports. Existing categories stay as they are.") }
                         }
                     }
+                    Section {
+                        Button(role: .destructive) { confirmingDeletion = true } label: {
+                            Label("Delete transaction", systemImage: "trash")
+                        }
+                    }
                 }.scrollContentBackground(.hidden).background(paper)
                     .navigationTitle("Transaction details").navigationBarTitleDisplayMode(.inline)
                     .toolbar {
@@ -2457,6 +2629,18 @@ struct TransactionDetailView: View {
                         if (try? entry.validatedReimbursement(reimbursement)) != nil { saveReimbursement() }
                         store.setNotes(transactionID: transactionID, notes: notes)
                     }
+                    .confirmationDialog("Delete this transaction?", isPresented: $confirmingDeletion, titleVisibility: .visible) {
+                        Button("Delete transaction", role: .destructive) {
+                            if store.deleteTransaction(id: transactionID) { dismiss() }
+                            else { deletionFailed = true }
+                        }
+                        Button("Cancel", role: .cancel) { }
+                    } message: {
+                        Text("This removes it from Budget and spending totals. A local exclusion prevents the same record returning on sync or import. Your bank’s records are unchanged.")
+                    }
+                    .alert("Could not delete transaction", isPresented: $deletionFailed) {
+                        Button("OK", role: .cancel) { }
+                    } message: { Text("The deletion could not be saved. Please try again.") }
                     .sheet(isPresented: $editingMerchant) {
                         NavigationStack {
                             let rule = MerchantMatchingRule.forEditing(entry: entry, matches: store.merchantMatches,

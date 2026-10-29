@@ -118,3 +118,23 @@ private func balanceAccount(_ id: String, _ balance: String?, currency: String =
     #expect(BankBalanceSummary(accounts: accounts, currency: "EUR").total == 100)
     #expect(BankBalanceSummary(accounts: accounts, currency: "USD").total == nil)
 }
+
+@Test func accountContinuationsPreserveHistoryAndRejectCyclesAndOtherBanks() {
+    func card(_ id: String, currency: String = "GBP") -> BankAccount {
+        BankAccount(id: id, name: "Card", kind: "cards", currency: currency, current: "100", transactionCount: 1)
+    }
+    let old = card("truelayer:bank:cards:old:")
+    let new = card("truelayer:bank:cards:new:")
+    let latest = card("truelayer:bank:cards:latest:")
+    let links = [old.id: new.id, new.id: latest.id]
+    let entry = Entry(id: old.id + "stable:purchase", date: Date(), description: "Purchase", amount: -10, account: "Old card")
+    #expect(AccountContinuations.canLink(old, to: new, links: [:]))
+    #expect(!AccountContinuations.canLink(latest, to: old, links: links))
+    #expect(!AccountContinuations.canLink(old, to: card("truelayer:other:cards:new:"), links: [:]))
+    #expect(!AccountContinuations.canLink(old, to: card(new.id, currency: "EUR"), links: [:]))
+    #expect(AccountContinuations.contains(entry, in: latest.id, links: links))
+    #expect(!AccountContinuations.contains(entry, in: latest.id, links: [:]))
+    #expect(entry.id == old.id + "stable:purchase")
+    #expect(AccountContinuations.prefix(for: "csv:one") == nil)
+    #expect(AccountContinuations.resolved(old.id, links: [old.id: new.id, new.id: old.id]) == old.id)
+}
